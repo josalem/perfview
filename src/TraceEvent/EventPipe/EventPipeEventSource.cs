@@ -23,7 +23,7 @@ namespace Microsoft.Diagnostics.Tracing
 
         public static void Init()
         {
-            logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
+            logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
             zipStream = new GZipStream(logStream, CompressionLevel.Fastest);
             writer = new StreamWriter(zipStream);
             sw = new Stopwatch();
@@ -32,19 +32,18 @@ namespace Microsoft.Diagnostics.Tracing
 
         public static void Finish()
         {
-
             writer?.Dispose();
             zipStream?.Dispose();
             logStream?.Dispose();
             sw.Stop();
         }
 
-        public static void StartReadFromSocket(long length) => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadFromSocket START - length={length}");
-        public static void StopReadFromSocket(long length) => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadFromSocket STOP - length={length}");
-        public static void StartProcessEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ProcessEvent START");
-        public static void StopProcessEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ProcessEvent STOP");
-        public static void StartReadEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadEvent START");
-        public static void StopReadEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadEvent STOP");
+        public static void StartReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;0;{length}");
+        public static void StopReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;1;{length}");
+        public static void StartProcessEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};PE;0");
+        public static void StopProcessEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};PE;1");
+        public static void StartReadEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RE;0");
+        public static void StopReadEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RE;1");
     }
 
     // This Stream implementation takes one stream
@@ -253,6 +252,7 @@ namespace Microsoft.Diagnostics.Tracing
                 }
             }
 #endif
+            EPESInstrumentationSource.Finish();
             return true;
         }
 
