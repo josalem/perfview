@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -18,17 +19,22 @@ namespace Microsoft.Diagnostics.Tracing
         private static FileStream logStream = null;
         private static StreamWriter writer = null;
         private static Stopwatch sw = null;
+        private static GZipStream zipStream = null;
+
         public static void Init()
         {
             logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
-            writer = new StreamWriter(logStream);
+            zipStream = new GZipStream(logStream, CompressionLevel.Fastest);
+            writer = new StreamWriter(zipStream);
             sw = new Stopwatch();
             sw.Start();
         }
 
         public static void Finish()
         {
+
             writer?.Dispose();
+            zipStream?.Dispose();
             logStream?.Dispose();
             sw.Stop();
         }
