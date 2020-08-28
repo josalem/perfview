@@ -13,13 +13,28 @@ using System.Text;
 
 namespace Microsoft.Diagnostics.Tracing
 {
-    internal class EPESInstrumentationSource : EventSource
+    internal static class EPESInstrumentationSource
     {
-        public static EPESInstrumentationSource Log = new EPESInstrumentationSource();
+        private FileStream logStream = null;
+        private StreamWriter writer = null;
+        public static void Init()
+        {
+            logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
+            BinaryWriter = new StreamWriter(logStream);
+        }
 
-        public void ReadEventFromStream(TimeSpan duration, long length) => WriteEvent(1, new { duration=duration.TotalMilliseconds, length=length });
-        public void ProcessedEvent(TimeSpan duration) => WriteEvent(2, new { duration=duration.TotalMilliseconds });
-        public void ReadEvent(TimeSpan duration) => WriteEvent(3, new { duration=duration.TotalMilliseconds });
+        public static void Finish()
+        {
+            writer?.Dispose();
+            logStream?.Dispose();
+        }
+
+        public static void StartReadFromSocket(long length) => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadFromSocket START - length={length}");
+        public static void StopReadFromSocket(long length) => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadFromSocket STOP - length={length}");
+        public static void StartProcessEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ProcessEvent START");
+        public static void StopProcessEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ProcessEvent STOP");
+        public static void StartReadEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadEvent START");
+        public static void StopReadEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadEvent STOP");
     }
 
     // This Stream implementation takes one stream
@@ -37,8 +52,6 @@ namespace Microsoft.Diagnostics.Tracing
 
         public override long Position { get => ProxiedStream.Position; set => ProxiedStream.Position = value; }
 
-        private Stopwatch sw = new Stopwatch();
-
         public StreamProxy(Stream streamToProxy)
         {
             ProxiedStream = streamToProxy;
@@ -53,11 +66,9 @@ namespace Microsoft.Diagnostics.Tracing
         // the bytes to the internal MemoryStream and then throw
         public override int Read(byte[] buffer, int offset, int count)
         {
-            sw.Reset();
-            sw.Start();
+            EPESInstrumentationSource.StartReadFromSocket(count);
             var readCount = ProxiedStream.Read(buffer, offset, count);
-            sw.Stop();
-            EPESInstrumentationSource.Log.ReadEventFromStream(sw.Elapsed, readCount);
+            EPESInstrumentationSource.StopReadFromSocket(readCount);
             return readCount;
         }
 
@@ -113,6 +124,7 @@ namespace Microsoft.Diagnostics.Tracing
 
         private EventPipeEventSource(PinnedStreamReader streamReader, string name)
         {
+            EPESInstrumentationSource.Init();
             StreamLabel start = streamReader.Current;
             byte[] netTraceMagic = new byte[8];
             streamReader.Read(netTraceMagic, 0, netTraceMagic.Length);
@@ -216,11 +228,7 @@ namespace Microsoft.Diagnostics.Tracing
                 PinnedStreamReader deserializerReader = (PinnedStreamReader)_deserializer.Reader;
                 while (deserializerReader.Current < _endOfEventStream)
                 {
-                    sw.Reset();
-                    sw.Start();
                     TraceEventNativeMethods.EVENT_RECORD* eventRecord = ReadEvent(deserializerReader, false);
-                    sw.Stop();
-                    EPESInstrumentationSource.Log.ReadEvent(sw.Elapsed);
                     if (eventRecord != null)
                     {
                         // in the code below we set sessionEndTimeQPC to be the timestamp of the last event.
@@ -228,12 +236,8 @@ namespace Microsoft.Diagnostics.Tracing
                         Debug.Assert(sessionEndTimeQPC <= eventRecord->EventHeader.TimeStamp);
                         Debug.Assert(sessionEndTimeQPC == 0 || eventRecord->EventHeader.TimeStamp - sessionEndTimeQPC < _QPCFreq * 24 * 3600);
 
-                        sw.Reset();
-                        sw.Start();
                         var traceEvent = Lookup(eventRecord);
                         Dispatch(traceEvent);
-                        sw.Stop();
-                        EPESInstrumentationSource.Log.ProcessedEvent(sw.Elapsed);
                         sessionEndTimeQPC = eventRecord->EventHeader.TimeStamp;
                     }
                 }
@@ -250,7 +254,12 @@ namespace Microsoft.Diagnostics.Tracing
 
         internal void ReadAndDispatchEvent(PinnedStreamReader reader, bool useHeaderCompression)
         {
-            DispatchEventRecord(ReadEvent(reader, useHeaderCompression));
+            EPESInstrumentationSource.StartReadEvent();
+            var evnt = ReadEvent(reader, useHeaderCompression);
+            EPESInstrumentationSource.StopReadEvent();
+            EPESInstrumentationSource.StartProcessEvent();
+            DispatchEventRecord(evnt);
+            EPESInstrumentationSource.StopProcessEvent();
         }
 
         internal void DispatchEventRecord(TraceEventNativeMethods.EVENT_RECORD* eventRecord)
