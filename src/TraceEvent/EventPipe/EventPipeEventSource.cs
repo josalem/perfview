@@ -15,26 +15,30 @@ namespace Microsoft.Diagnostics.Tracing
 {
     internal static class EPESInstrumentationSource
     {
-        private FileStream logStream = null;
-        private StreamWriter writer = null;
+        private static FileStream logStream = null;
+        private static StreamWriter writer = null;
+        private static Stopwatch sw = null;
         public static void Init()
         {
             logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
-            BinaryWriter = new StreamWriter(logStream);
+            writer = new StreamWriter(logStream);
+            sw = new Stopwatch();
+            sw.Start();
         }
 
         public static void Finish()
         {
             writer?.Dispose();
             logStream?.Dispose();
+            sw.Stop();
         }
 
-        public static void StartReadFromSocket(long length) => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadFromSocket START - length={length}");
-        public static void StopReadFromSocket(long length) => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadFromSocket STOP - length={length}");
-        public static void StartProcessEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ProcessEvent START");
-        public static void StopProcessEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ProcessEvent STOP");
-        public static void StartReadEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadEvent START");
-        public static void StopReadEvent() => writer?.WriteLine($"[{DateTime.Now.ToString()}] ReadEvent STOP");
+        public static void StartReadFromSocket(long length) => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadFromSocket START - length={length}");
+        public static void StopReadFromSocket(long length) => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadFromSocket STOP - length={length}");
+        public static void StartProcessEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ProcessEvent START");
+        public static void StopProcessEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ProcessEvent STOP");
+        public static void StartReadEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadEvent START");
+        public static void StopReadEvent() => writer?.WriteLine($"[{sw.Elapsed.TotalSeconds}] ReadEvent STOP");
     }
 
     // This Stream implementation takes one stream
