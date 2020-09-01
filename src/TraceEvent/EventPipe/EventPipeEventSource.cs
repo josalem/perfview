@@ -26,7 +26,7 @@ namespace Microsoft.Diagnostics.Tracing
             string enabledValue = Environment.GetEnvironmentVariable("TRACE_EVENT_ENABLE_INSTRUMENTATION");
             if (string.IsNullOrEmpty(enabledValue))
                 return;
-            logStream = new FileStream($"EPES_log_{(long)Math.Ceiling(DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds)}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
+            logStream = new FileStream($"EPES_log_{Process.GetCurrentProcess().Id}_{DateTime.Now:yyyyMMddHHmmss}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
             zipStream = new GZipStream(logStream, CompressionLevel.Fastest);
             writer = new StreamWriter(zipStream);
             sw = new Stopwatch();
@@ -41,10 +41,10 @@ namespace Microsoft.Diagnostics.Tracing
             sw?.Stop();
         }
 
-        public static void StartReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;0;{length}");
-        public static void StopReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;1;{length}");
-        public static void StartDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;0");
-        public static void StopDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;1");
+        public static void StartReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};R+;{length}");
+        public static void StopReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};R-;{length}");
+        public static void StartDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};D+");
+        public static void StopDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};D-");
     }
 
     // This Stream implementation takes one stream
