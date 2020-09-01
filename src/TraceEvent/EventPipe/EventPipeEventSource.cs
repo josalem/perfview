@@ -11,6 +11,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace Microsoft.Diagnostics.Tracing
 {
@@ -20,31 +21,99 @@ namespace Microsoft.Diagnostics.Tracing
         private static StreamWriter writer = null;
         private static Stopwatch sw = null;
         private static GZipStream zipStream = null;
+        private static object writeSync = new object();
+        private static object configSync = new object();
+        private static bool isEnabled = false;
+        private static Timer timer = null;
+        private static TimeSpan rolloverDuration = TimeSpan.FromMinutes(30);
+        private static Queue<string> previousLogs = new Queue<string>();
+
+        private static void StartNewLog()
+        {
+            lock (configSync)
+            {
+                if (!isEnabled)
+                    return;
+
+                string newFileName = $"EPES_log_{Process.GetCurrentProcess().Id}_{DateTime.Now:yyyyMMddHHmmss}.txt.gz";
+                var newFileStream = new FileStream(newFileName, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
+                var newZipStream = new GZipStream(newFileStream, CompressionLevel.Fastest);
+                var newStreamWriter = new StreamWriter(newZipStream);
+
+                FileStream tmpFileStream = null;
+                GZipStream tmpZipStream = null;
+                StreamWriter tmpStreamWriter = null;
+
+                // swap out the logs
+                lock (writeSync)
+                {
+                    tmpFileStream = logStream;
+                    tmpZipStream = zipStream;
+                    tmpStreamWriter = writer;
+
+                    logStream = newFileStream;
+                    zipStream = newZipStream;
+                    writer = newStreamWriter;
+                }
+
+                tmpStreamWriter?.Dispose();
+                tmpZipStream?.Dispose();
+                tmpFileStream?.Dispose();
+
+                previousLogs.Enqueue(newFileName);
+
+                // only keep the last 2 logs
+                if (previousLogs.Count > 2)
+                {
+                    File.Delete(previousLogs.Dequeue());
+                }
+            }
+        }
 
         public static void Init()
         {
-            string enabledValue = Environment.GetEnvironmentVariable("TRACE_EVENT_ENABLE_INSTRUMENTATION");
-            if (string.IsNullOrEmpty(enabledValue))
-                return;
-            logStream = new FileStream($"EPES_log_{(long)Math.Ceiling(DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds)}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
-            zipStream = new GZipStream(logStream, CompressionLevel.Fastest);
-            writer = new StreamWriter(zipStream);
-            sw = new Stopwatch();
-            sw.Start();
+            lock (configSync)
+            {
+                isEnabled = true;
+                // Set to an int to specify a number of minutes for file rollover.  Any other value will use the default (30 minutes)
+                string enabledValue = Environment.GetEnvironmentVariable("TRACE_EVENT_ENABLE_INSTRUMENTATION");
+                if (string.IsNullOrEmpty(enabledValue))
+                    return;
+                else if (int.TryParse(enabledValue, out int nMinutes) && nMinutes > 0)
+                    rolloverDuration = TimeSpan.FromMinutes(nMinutes);
+                sw = new Stopwatch();
+                sw.Start();
+                timer = new Timer(_ =>
+                {
+                    StartNewLog();
+                }, null, TimeSpan.FromMilliseconds(0), rolloverDuration);
+            }
         }
 
         public static void Finish()
         {
-            writer?.Dispose();
-            zipStream?.Dispose();
-            logStream?.Dispose();
-            sw?.Stop();
+            lock (writeSync)
+            {
+                lock (configSync)
+                {
+                    isEnabled = false;
+                    timer?.Dispose();
+                    timer = null;
+                    writer?.Dispose();
+                    writer = null;
+                    zipStream?.Dispose();
+                    zipStream = null;
+                    logStream?.Dispose();
+                    logStream = null;
+                    sw?.Stop();
+                }
+            }
         }
 
-        public static void StartReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;0;{length}");
-        public static void StopReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;1;{length}");
-        public static void StartDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;0");
-        public static void StopDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;1");
+        public static void StartReadFromSocket(long length) { lock (writeSync) { writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};R;0;{length}"); } }
+        public static void StopReadFromSocket(long length) { lock (writeSync) { writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};R;1;{length}"); } }
+        public static void StartDispatchEvent() { lock (writeSync) { writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};D;0"); } }
+        public static void StopDispatchEvent() { lock (writeSync) { writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};D;1"); } }
     }
 
     // This Stream implementation takes one stream
@@ -69,11 +138,6 @@ namespace Microsoft.Diagnostics.Tracing
 
         public override void Flush() => ProxiedStream.Flush();
 
-        // Read the actual desired amount of bytes into an empty buffer
-        // copy those bytes into an internal MemoryStream THEN
-        // forward those bytes to the caller. If the caller
-        // would have thrown an exception with its Read, copy
-        // the bytes to the internal MemoryStream and then throw
         public override int Read(byte[] buffer, int offset, int count)
         {
             EPESInstrumentationSource.StartReadFromSocket(count);
