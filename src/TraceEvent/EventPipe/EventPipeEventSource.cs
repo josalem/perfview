@@ -23,7 +23,10 @@ namespace Microsoft.Diagnostics.Tracing
 
         public static void Init()
         {
-            logStream = new FileStream($"EPES_log_{DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
+            string enabledValue = Environment.GetEnvironmentVariable("TRACE_EVENT_ENABLE_INSTRUMENTATION");
+            if (string.IsNullOrEmpty(enabledValue))
+                return;
+            logStream = new FileStream($"EPES_log_{(long)Math.Ceiling(DateTime.Now.Subtract(new DateTime(1970,1,1)).TotalSeconds)}.txt.gz", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 256 * (1 << 10) /* 256 KB */);
             zipStream = new GZipStream(logStream, CompressionLevel.Fastest);
             writer = new StreamWriter(zipStream);
             sw = new Stopwatch();
@@ -35,15 +38,13 @@ namespace Microsoft.Diagnostics.Tracing
             writer?.Dispose();
             zipStream?.Dispose();
             logStream?.Dispose();
-            sw.Stop();
+            sw?.Stop();
         }
 
         public static void StartReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;0;{length}");
         public static void StopReadFromSocket(long length) => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RFS;1;{length}");
-        public static void StartProcessEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};PE;0");
-        public static void StopProcessEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};PE;1");
-        public static void StartReadEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RE;0");
-        public static void StopReadEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};RE;1");
+        public static void StartDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;0");
+        public static void StopDispatchEvent() => writer?.WriteLine($"{sw.Elapsed.TotalSeconds:F9};DE;1");
     }
 
     // This Stream implementation takes one stream
@@ -264,18 +265,14 @@ namespace Microsoft.Diagnostics.Tracing
 
         internal void ReadAndDispatchEvent(PinnedStreamReader reader, bool useHeaderCompression)
         {
-            EPESInstrumentationSource.StartReadEvent();
-            var evnt = ReadEvent(reader, useHeaderCompression);
-            EPESInstrumentationSource.StopReadEvent();
-            EPESInstrumentationSource.StartProcessEvent();
-            DispatchEventRecord(evnt);
-            EPESInstrumentationSource.StopProcessEvent();
+            DispatchEventRecord(ReadEvent(reader, useHeaderCompression));
         }
 
         internal void DispatchEventRecord(TraceEventNativeMethods.EVENT_RECORD* eventRecord)
         {
             if (eventRecord != null)
             {
+                EPESInstrumentationSource.StartDispatchEvent();
                 // in the code below we set sessionEndTimeQPC to be the timestamp of the last event.
                 // Thus the new timestamp should be later, and not more than 1 day later.
                 Debug.Assert(sessionEndTimeQPC <= eventRecord->EventHeader.TimeStamp);
@@ -284,6 +281,7 @@ namespace Microsoft.Diagnostics.Tracing
                 var traceEvent = Lookup(eventRecord);
                 Dispatch(traceEvent);
                 sessionEndTimeQPC = eventRecord->EventHeader.TimeStamp;
+                EPESInstrumentationSource.StopDispatchEvent();
             }
         }
 
